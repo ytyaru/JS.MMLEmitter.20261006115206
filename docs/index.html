@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MML-Emitter テスト</title>
+    <script src="mml-emitter.min.js"></script>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 30px 20px; background: #f8f9fa; color: #333; }
+        h1 { font-size: 24px; text-align: center; margin-bottom: 20px; }
+        .controls { display: flex; flex-direction: column; gap: 15px; }
+        textarea { width: 100%; height: 120px; padding: 12px; font-family: monospace; font-size: 16px; border: 2px solid #ccc; border-radius: 6px; box-sizing: border-box; resize: vertical; }
+        button { width: 100%; padding: 14px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; color: white; transition: background 0.2s; }
+        .state-play { background: #28a745; }
+        .state-play:hover { background: #218838; }
+        .state-stop { background: #dc3545; }
+        .state-stop:hover { background: #c82333; }
+        #status { text-align: center; font-weight: bold; margin-top: 15px; color: #666; min-height: 24px; }
+    </style>
+</head>
+<body>
+
+    <h1>MML-Emitter 再生エディタ</h1>
+    
+    <div class="controls">
+        <textarea id="mmlInput" spellcheck="false">t120 o5 l4 c d e f e d c r e f g a g f e r</textarea>
+        <button id="toggleBtn" class="state-play">再生 ▶</button>
+    </div>
+
+    <div id="status">テキストエリアのMMLを書き換えて再生できます</div>
+
+    <script>
+        let audioContext = null;
+        let mmlEmitter = null;
+        let isPlaying = false;
+
+        const mmlInput = document.getElementById('mmlInput');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const statusDiv = document.getElementById('status');
+
+        // MIDIノート番号を周波数(Hz)に変換する関数
+        function mtof(noteNumber) {
+            return 440 * Math.pow(2, (noteNumber - 69) / 12);
+        }
+
+        function updateButtonState(playing) {
+            isPlaying = playing;
+            if (isPlaying) {
+                toggleBtn.innerText = "停止 ■";
+                toggleBtn.className = "state-stop";
+                statusDiv.innerText = "🎵 MMLを再生中...";
+                statusDiv.style.color = "#28a745";
+            } else {
+                toggleBtn.innerText = "再生 ▶";
+                toggleBtn.className = "state-play";
+                statusDiv.innerText = "⏹️ 停止中（テキスト変更可能）";
+                statusDiv.style.color = "#666";
+            }
+        }
+
+        function stopMML() {
+            if (mmlEmitter) {
+                mmlEmitter.stop();
+                mmlEmitter = null;
+            }
+            updateButtonState(false);
+        }
+
+        toggleBtn.addEventListener('click', () => {
+            if (isPlaying) {
+                stopMML();
+                return;
+            }
+
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            const mmlString = mmlInput.value;
+
+            try {
+                // 正しい引数: new MMLEmitter(mmlString, { context: audioContext })
+                mmlEmitter = new MMLEmitter(mmlString, { context: audioContext });
+            } catch (err) {
+                statusDiv.innerText = "❌ MMLの構文エラー: " + err.message;
+                statusDiv.style.color = "#dc3545";
+                return;
+            }
+
+            // nodeイベントのハンドリング
+            mmlEmitter.on('note', (e) => {
+                // 休符や、ノート番号が含まれないイベントは処理しない
+                if (e.noteNumber === undefined || e.noteNumber === null || e.noteNumber < 0) return;
+
+                // 正常な有限浮動小数点数（周波数）を算出
+                const frequency = mtof(e.noteNumber);
+
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+
+                osc.type = 'triangle'; 
+                osc.frequency.value = frequency;
+
+                // 音量制御（プチプチ音防止）
+                gain.gain.setValueAtTime(0.2, e.playbackTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, e.playbackTime + e.duration);
+
+                osc.connect(gain);
+                gain.connect(audioContext.destination);
+
+                osc.start(e.playbackTime);
+                osc.stop(e.playbackTime + e.duration);
+            });
+
+            mmlEmitter.on('end:all', () => {
+                stopMML();
+            });
+
+            mmlEmitter.start();
+            updateButtonState(true);
+        });
+    </script>
+</body>
+</html>
